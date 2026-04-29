@@ -1,25 +1,21 @@
 import argparse
 import csv
-import glob
+import io
 import logging
 import os
 import random
 import sys
 
-from shutil import copyfile
-
-import openpyxl
 import pandas as pd
 import numpy as np
 import matplotlib as mpl
+mpl.use('Agg')  # non-interactive backend; required in web workers (no DOM)
 import matplotlib.pyplot as plt
 from matplotlib.lines import Line2D
 
-import svgutils as su
+from cadnano.fileio.v2encode import encodeDocument as _encodeDocument
 
-from cn2svg import cn2svg
-
-from autobreak import origamidesign, scaffolds, utilities
+import origamidesign, scaffolds, utilities
 
 
 class OligoBreakSolution:
@@ -367,38 +363,16 @@ class CompleteBreakSolution:
 
         return summary_rows
 
-    def export_staples(self, filename):
-        '''Export the staples and its scores into an excel file'''
-        # Get summary rows
-        summary_rows = np.array(self.get_summary_rows())
-
-        # Get the csv rows
+    def export_staples(self, filename_or_buf):
+        '''Export the staples and its scores into a CSV buffer or file.'''
         csv_rows = np.array(self.get_csv_rows())
-
-        # If the data arrays are empty, quit
-        if len(summary_rows) == 0 or len(csv_rows) == 0:
+        if len(csv_rows) == 0:
             return
-
-        # Write to `filename` workbook
-        with pd.ExcelWriter(filename, engine="openpyxl", mode="a", if_sheet_exists="overlay") as writer:
-
-            # Assign sheet number
-            sheet_number = self.sequence_offset
-
-            # Create data frames
-            self.summary_frame = pd.DataFrame(summary_rows)
-
-            # Create staples frames
-            self.staples_frame = pd.DataFrame(csv_rows, columns=self.csv_header)
-
-            # Write summary data
-            self.summary_frame.to_excel(writer, sheet_name=str(sheet_number), header=None, index=False)
-
-            # Write staples data
-            self.staples_frame.to_excel(writer, sheet_name=str(sheet_number), header=self.csv_header, index=False, startrow=10)
-
-            # Save and close
-            # writer.close()
+        self.staples_frame = pd.DataFrame(csv_rows, columns=self.csv_header)
+        if hasattr(filename_or_buf, 'write'):
+            self.staples_frame.to_csv(filename_or_buf, index=False)
+        else:
+            self.staples_frame.to_csv(filename_or_buf, index=False)
 
 
 class AutoStaple:
@@ -606,49 +580,25 @@ class AutoBreak:
         return self.results_summary
 
     def write_results_summary(self):
-        '''Write results summary'''
-
-        # Get results summary
+        '''Write results summary to the in-memory CSV buffer.'''
         results_summary = np.array(self.get_results_summary())
-
-        # If the array is empty, quit
         if len(results_summary) == 0:
             sys.exit('SOLUTION DOESNT EXIST')
-
-        # Create writer
-        if os.path.exists(self.results_excel_file):
-            writer = pd.ExcelWriter(self.results_excel_file, engine='openpyxl', mode='a', if_sheet_exists="overlay")
-        else:
-            writer = pd.ExcelWriter(self.results_excel_file, engine='openpyxl', mode='w')
-
-        # Create data frames
-        self.summary_frame  = pd.DataFrame(results_summary)
-
-        # Create summary header
         self.summary_header = ['SequenceOffset', 'CorrectedOffset', 'TotalProb', 'TotalScore', 'TotalNormScore', 'TotalPenalty']
-
-        # Write summary data
-        self.summary_frame.to_excel(writer, sheet_name='Summary', header=self.summary_header, index=False)
-
-        # Save writer and close
-        writer.close()
+        self.summary_frame = pd.DataFrame(results_summary, columns=self.summary_header)
+        self.summary_frame.to_csv(self._csv_buf, index=False)
 
     def write_results(self, sequence_offset=0):
-        '''Write Solution results to a sheet in results excel file'''
-        if sequence_offset in self.complete_solutions:
-            self.complete_solutions[sequence_offset].export_staples(self.results_excel_file)
+        '''No-op in plugin mode (intermediate results not written).'''
+        pass
 
     def write_best_result(self):
-        '''Write best result'''
-        if not self.write_all_results:
-            self.best_complete_solution.export_staples(self.results_excel_file)
+        '''No-op in plugin mode.'''
+        pass
 
     def create_results_excel_file(self):
-        '''Create resuls excel file'''
-        wb = openpyxl.Workbook()
-        sheet = wb.active
-        sheet.title = 'Summary'
-        wb.save(self.results_excel_file)
+        '''No-op in plugin mode — buffers are initialised in define_output_files.'''
+        pass
 
     def set_lower_bound(self, min_length=21):
         '''Set lower bound'''
@@ -710,91 +660,40 @@ class AutoBreak:
             self.NUM_OLIGO_SOLUTIONS  = 1
             self.NUM_GLOBAL_SOLUTIONS = 1
 
-    def set_output_directory(self, input_filename, output_directory=None):
-        '''Set output directory'''
-        # Split input file
-        head, tail       = os.path.split(os.path.abspath(input_filename))
-        root, ext        = os.path.splitext(tail)
-
-        # Keep the original input filename provided as input
-        self.input_filename = input_filename
-
-        # Save the filename with head removed only tail
-        self.input_tail     = tail
-
-        # List existing output directories
-        potential_directories = list(filter(lambda x: os.path.isdir(x),
-                                            glob.glob(head+'/'+root+'_autobreak_[0-9][0-9][0-9][0-9]')))
-
-        # Get the number extensions
-        number_extensions = [int(x[-4:]) for x in potential_directories]
-
-        # Get the counter
-        self.output_counter = 1
-        if len(number_extensions) > 0:
-            self.output_counter = max(number_extensions)+1
-
-        # Check the output directory
-        if output_directory is None:
-            self.output_directory = os.path.join(head, f"{root}_autobreak_{self.output_counter:04d}")
+    def set_output_directory(self, json_dict_or_filename, output_directory=None):
+        '''Set output info from an in-memory JSON dict (no filesystem ops).'''
+        if isinstance(json_dict_or_filename, dict):
+            self.design_name = json_dict_or_filename.get('name', 'design')
         else:
-            self.output_directory = output_directory
-
-        # Make the output directory        
-        inputs_dir = os.path.join(self.output_directory, 'inputs')
-        intermediates_dir = os.path.join(self.output_directory, 'intermediates')
-        outputs_dir = os.path.join(self.output_directory, 'outputs')
-        os.makedirs(inputs_dir, exist_ok=True)
-        os.makedirs(intermediates_dir, exist_ok=True)
-        os.makedirs(outputs_dir, exist_ok=True)
-
-        # Copy input file to output directory
-        copyfile(self.input_filename, os.path.join(inputs_dir, self.input_tail))
+            # Legacy path — kept for CLI usage
+            root = os.path.splitext(os.path.basename(json_dict_or_filename))[0]
+            self.design_name = root
+            self.input_filename = json_dict_or_filename
+            self.input_tail = os.path.basename(json_dict_or_filename)
+        self.output_counter = 1
+        self.output_directory = output_directory or '.'
 
     def copy_sequence_file(self):
-        '''Copy sequence file to output directory'''
-        if self.origami.sequence_file and os.path.isfile(self.origami.sequence_file):
-            head, tail = os.path.split(self.origami.sequence_file)
-            self.seq_filename = os.path.join(self.output_directory, tail)
-            copyfile(self.origami.sequence_file, self.seq_filename)
-        elif self.origami.sequence_file not in scaffolds.SCAFFOLD_SEQUENCES:
-            self.seq_filename = os.path.join(self.output_directory, 'inputs', 'random_seq.txt')
-            f = open(self.seq_filename, 'w')
-            f.write(self.origami.scaffold_sequence)
-            f.close()
-        elif self.origami.sequence_file in scaffolds.SCAFFOLD_SEQUENCES:
-            # Write the known sequence for convenient use by other tools
-            self.seq_filename = os.path.join(self.output_directory,'inputs', '{}_seq.txt'.format(self.origami.sequence_file))
-            f = open(self.seq_filename, 'w')
-            f.write(self.origami.scaffold_sequence)
-            f.close()
+        '''No-op in plugin mode — no filesystem.'''
+        pass
 
     def write_input_args(self):
-        '''Write input arguments in a txt file'''
-        self.args_file = os.path.join(self.output_directory, 'inputs', self.output_name+'_args.txt')
-        with open(self.args_file, 'w') as f: 
-            for key in self.args_dict:
-                f.write('%-9s: %s\n' % (key, self.args_dict[key]))
+        '''No-op in plugin mode — no filesystem.'''
+        pass
 
 
     def create_staple_heatmap(self, is_notebook_session):
-        '''Generate Cadnano schematic in SVG format using cn2svg'''
-        svg_args = cn2svg.DefaultArgs()
-        svg_args.input      = self.json_legacy_output  # Cadnano json file
-        svg_args.output     = self.results_heatmap_dir # Output directory
-        svg_args.seq        = self.seq_filename        # Scaffold sequence file
-        svg_args.heatmap    = True                     # Hide staple crossovers which occlude heatmap interpretation
-        cn2svg.run(is_notebook_session=is_notebook_session, args=svg_args)
+        '''Not available in plugin mode (cn2svg not in Pyodide).'''
+        pass
 
     def create_results_plots(self):
-        '''Generate Staple Results plot in SVG format using matplotlib'''
+        '''Generate Staple Results plot using matplotlib, saved to in-memory PNG buffer.'''
 
-        if not os.path.exists(self.results_excel_file): 
+        if self.staples_frame is None:
             return
 
-        # Read specific columns from the file
-        df = pd.read_excel(self.results_excel_file, sheet_name='Final', 
-                           usecols=['Tf', 'TfColor', 'dGhyb', 'dGloop'])
+        # Use in-memory DataFrame (already built by export_initial_scores)
+        df = self.staples_frame[['Tf', 'TfColor', 'dGhyb', 'dGloop']].copy()
 
         # Set the aesthetic style of the plots
         plt.style.use('bmh')
@@ -874,158 +773,53 @@ class AutoBreak:
         ax3.set_xticks([0, 25, 50])
         ax3.set_yticks([0,-25,-50])
 
-        # Save the entire figure
-        # plt.savefig(f"{file_name}.svg")
-        plt.savefig(self.results_plots)
-        plt.savefig(self.results_plots_png)
+        # Save to in-memory PNG buffer
+        self._plots_buf.seek(0)
+        self._plots_buf.truncate(0)
+        plt.savefig(self._plots_buf, format='png')
+        plt.close('all')
 
 
     def create_summary_figure(self):
-        '''Compose Cadnano schematic and Results plots using svgutils'''
-
-        # Load SVG files as svgutils.transform.SVGFigure objects to get dimensions
-        svg_A = su.transform.fromfile(self.results_heatmap_path)
-        svg_B = su.transform.fromfile(self.results_plots)
-
-        # Get the width and height, removing any `pt` units
-        wA, hA = (float(d.replace('pt', '')) for d in svg_A.get_size())
-        wB, hB = (float(d.replace('pt', '')) for d in svg_B.get_size())
-
-        # Weirdly, reload SVG fils as svgutils.compose.SVG object so we can transform them
-        svg_A = su.compose.SVG(self.results_heatmap_path)
-        svg_B = su.compose.SVG(self.results_plots)
-
-        # Choose layout based on heatmap dimensions
-        horizontal_layout = True if wA < 2*hA else False
-
-        # Calculate the scale factor for A.svg
-        if horizontal_layout:
-            # narrow heatmaps scale to 80% plot height
-            scale_factor = 0.8*hB/hA
-        else:
-            # wide heatmaps scale to plot width
-            scale_factor = wB/wA
-
-        new_wA = wA * scale_factor
-        new_hA = hA * scale_factor
-
-        # Scale A according 
-        scaled_A = su.compose.Figure(new_wA, new_hA, svg_A.scale(scale_factor))
-
-        if horizontal_layout:
-            # Create wide figure for horizontal layout
-            fig = su.transform.SVGFigure(new_wA+wB, hB)
-            # Position A.svg on the left, B.svg on the right
-            fig.append([scaled_A.move(0.1*new_wA, 0.11*hB), svg_B.move(1.1*new_wA, 0)])
-        else:
-            # Create tall figure for vertical layout
-            fig = su.transform.SVGFigure(new_wA, 1.1*hA+hB)
-            # Position A.svg on the left, B.svg on the right
-            fig.append([scaled_A.move(0,0), svg_B.move(0, 1.1*new_hA)])
-
-        # Save the final composite SVG
-        fig.save(self.results_report)
+        '''Not available in plugin mode (svgutils not in Pyodide).'''
+        pass
 
 
     def first_run_message(self):
-        message = '''
-Autobreak generates the following directory structure.
-
-{name}_autobreak_{run}               # Top-level run folder (e.g. 001, 002, ...)
-├── inputs/
-│   └── {name}.json                  # Original input file
-│   └── {name}_{run}_args.txt        # Run parameters
-│   └── *seq.txt                     # Scaffold sequence used
-├── intermediates/
-│   └── {name}_{run}_ab_ortho.svg    # Orthographic helix schematic
-│   └── {name}_{run}_ab_path.svg     # Path Heatmap diagram
-│   └── {name}_{run}_plots.svg       # Thermodynamic plots
-│   └── {name}_{run}.log             # Debug and stderr log
-└── outputs/
-    └── {name}_{run}_autobreak.json  # Break solution applied
-    └── {name}_{run}_report.svg      # Composite of heatmap and plots
-    └── {name}_{run}_results.xlsx    # Per-staple model calculations
-'''
-
-        # Get the current working directory
-        current_directory = os.getcwd()
-
-        # Pattern to match subdirectories of the form '*_autobreak_*'
-        pattern = os.path.join(current_directory, "*_autobreak_*")
-
-        # Search for directories matching the pattern
-        subdirectories = [d for d in glob.glob(pattern) if os.path.isdir(d)]
-
-        # Print welcome message if autobreak has not been run in this folder.
-        if len(subdirectories) == 1:
-            print(message)
+        '''No-op in plugin mode.'''
+        pass
 
 
     def define_output_files(self):
-        '''Define output files based on json input'''
+        '''Set up in-memory output buffers (no filesystem).'''
+        design_name = getattr(self, 'design_name', None) or \
+                      os.path.splitext(os.path.basename(
+                          getattr(self.origami, 'json_input', 'design.json')))[0]
+        self.output_name = name = '%s_%04d' % (design_name, self.output_counter)
+        print("Run name:", '%s_autobreak_%04d' % (design_name, self.output_counter))
 
-        # Split input file
-        head, tail       = os.path.split(self.origami.json_input)
-        root, ext        = os.path.splitext(tail)
-        self.output_name = name = '%s_%04d' % (root,self.output_counter)
-        print("Run name:", '%s_autobreak_%04d' % (root,self.output_counter))
-
-        outdir = self.output_directory
-
-        self.autobreak_log = os.path.join(outdir, 'intermediates', name+'.log')
-        logging.basicConfig(filename=self.autobreak_log, encoding='utf-8', 
-                            format='%(asctime)s %(levelname)s: %(message)s', 
-                            datefmt='%m/%d/%Y %I:%M:%S %p',
-                            level=logging.DEBUG)
-        # Prevent matplotlib from writing findfont messages to the log
         logging.getLogger('matplotlib').setLevel(logging.WARNING)
 
-        # Redirect stderr to logger
-        class StdErrLogger(object):
-            def write(self, message):
-                # Filter out empty messages or newlines
-                if message.rstrip() != "":
-                    logging.error(message.rstrip())
-
-            def flush(self):
-                pass  # Needed for compatibility with the file-like interface
-        # sys.stderr = StdErrLogger()
-
-        # Output file paths
-        self.json_legacy_output    = os.path.join(outdir, 'outputs', name+'_autobreak.json')
-        self.results_excel_file    = os.path.join(outdir, 'outputs', name+'_results.xlsx')
-        self.results_heatmap_dir   = os.path.join(outdir, 'intermediates')
-
-        self.results_heatmap_path  = os.path.join(outdir, 'intermediates', name+'_autobreak_path.svg')
-        self.results_heatmap_ortho = os.path.join(outdir, 'intermediates', name+'_autobreak_ortho.svg')
-        self.results_plots         = os.path.join(outdir, 'intermediates', name+'_plots.svg')
-        self.results_plots_png     = os.path.join(outdir, 'intermediates', name+'_plots.png')
-
-        self.results_report        = os.path.join(outdir, 'outputs', name+'_report.svg')
-
-        # Optional CSV output paths, enabled with `-csv` flag
-        self.autobreak_csv_file    = os.path.join(outdir, 'outputs', name+'_autobreak.csv')
-        self.summary_csv_file      = os.path.join(outdir, 'outputs', name+'_summary.csv')
-
-        # Zip archive
-        self.zip_archive_file      = f'{outdir}.zip'
+        # In-memory buffers replacing all disk outputs
+        self._csv_buf   = io.StringIO()
+        self._plots_buf = io.BytesIO()
+        self._result_json = None
 
     def zip_results(self):
-        '''Compresses the contents of the run directory into a zip file.'''
-        utilities.zip_directory(self.output_directory, self.zip_archive_file)
-        return self.zip_archive_file
+        '''No-op in plugin mode.'''
+        pass
 
     def write_part_to_json(self, filename, legacy_option=True):
-        '''Write part to json'''
+        '''Write part to json (disk path, legacy CLI mode only).'''
         self.origami.doc.writeToFile(filename, legacy=legacy_option)
 
     def write_start_part_to_json(self):
-        '''Write the starting point for autobreak'''
-        self.origami.doc.writeToFile(self.json_start_output, legacy=True)
+        '''No-op in plugin mode.'''
+        pass
 
     def write_final_part_to_json(self):
-        '''Write cadnano part to json'''
-        self.origami.doc.writeToFile(self.json_legacy_output, legacy=True)
+        '''Capture final part as an in-memory dict.'''
+        self._result_json = _encodeDocument(self.origami.doc)
 
     def set_pick_method(self, pick_method='random'):
         '''Set solution picking method'''
@@ -1300,34 +1094,8 @@ Autobreak generates the following directory structure.
 
     # Apply formatting to all sheets in the workbook
     def apply_formatting_to_all_sheets(self, workbook_path, column_name):
-        # Load the workbook
-        wb = openpyxl.load_workbook(workbook_path)
-
-        # Iterate over all sheets in the workbook
-        for sheet_name in wb.sheetnames:
-            sheet = wb[sheet_name]
-
-            # Finding the column number for the specified column name
-            column_letter = None
-            for col in sheet.iter_cols(1, sheet.max_column):
-                if col[0].value == column_name:
-                    column_letter = col[0].column_letter
-                    break
-
-            # Applying conditional formatting to the specified column across all rows
-            if column_letter:
-                for row in range(2, sheet.max_row + 1):
-                    cell = sheet[f'{column_letter}{row}']
-                    cell_value = cell.value
-                    # Only apply formatting if the cell has a value
-                    if cell_value:
-                        argb_color = self.convert_rgb_to_argb(cell_value)
-                        cell.fill = openpyxl.styles.PatternFill(start_color=argb_color, end_color=argb_color, fill_type="solid")
-                        font_color = "FFFFFF" if self.is_color_dark(cell_value) else "000000"
-                        cell.font = openpyxl.styles.Font(color=font_color)
-
-        # Save the changes to the Excel file
-        wb.save(workbook_path)
+        '''No-op in plugin mode — Excel formatting not needed for CSV output.'''
+        pass
 
     def export_initial_scores(self, write_csv=False):
         '''Export initial scores to final excel file'''
@@ -1367,40 +1135,14 @@ Autobreak generates the following directory structure.
         # Results header
         csv_header = self.final_complete_break_solution.csv_header
 
-        # Write the results
-        if os.path.exists(self.results_excel_file):
-            writer     = pd.ExcelWriter(self.results_excel_file, engine='openpyxl', mode='a', if_sheet_exists="overlay")
-        else:
-            writer     = pd.ExcelWriter(self.results_excel_file, engine='openpyxl', mode='w')
+        # Build DataFrames
+        self.summary_frame = pd.DataFrame(self.final_summary_data).T
+        self.staples_frame = pd.DataFrame(self.final_csv_rows, columns=self.csv_header).sort_values(by='Tf')
 
-        # Create data frames
-        self.summary_frame = pd.DataFrame(np.array(self.final_summary_data)).T
-
-        # Create staples frames
-        self.staples_frame = pd.DataFrame(np.array(self.final_csv_rows), columns=self.csv_header).sort_values(by='Tf')
-
-        # Write summary data
-        self.summary_frame.to_excel(writer, sheet_name=str('Summary'), header=None, index=False)
-
-        # Write staples data
-        self.staples_frame.to_excel(writer, sheet_name=str('Final'), header=csv_header, index=False)
-
-        # Save writer and close
-        writer.close()
-
-        # Apply heatmap coloring
-        self.apply_formatting_to_all_sheets(self.results_excel_file, 'TfColor')
-
-        # Write the csv files
-        if write_csv:
-            with open(self.autobreak_csv_file, 'w', newline='') as csvfile:
-                autobreakwriter = csv.writer(csvfile, delimiter=',')
-                autobreakwriter.writerow(csv_header)
-                autobreakwriter.writerows(self.final_csv_rows)
-
-            with open(self.summary_csv_file, 'w', newline='') as csvfile:
-                autobreakwriter = csv.writer(csvfile, delimiter=',')
-                autobreakwriter.writerows(self.final_summary_data)
+        # Always write to the in-memory CSV buffer
+        self._csv_buf.seek(0)
+        self._csv_buf.truncate(0)
+        self.staples_frame.to_csv(self._csv_buf, index=False)
 
     def create_oligo_solutions(self):
         '''Break oligos'''
@@ -2638,3 +2380,138 @@ def main():
 
     print("Notebook" if is_notebook_session else "Console", "mode.")
     run(is_notebook_session)
+
+
+def run_plugin(json_dict, args, ctx=None):
+    '''
+    Plugin entry point — accepts an in-memory cadnano v2 JSON dict.
+
+    Args:
+        json_dict: dict  — parsed cadnano v2 JSON
+        args: DefaultArgs-compatible namespace
+        ctx: foldnano plugin context (optional; used for logging)
+
+    Returns:
+        {
+          'cadnano_json': dict | None,   # modified design (None if read_only)
+          'csv': str,                    # per-staple thermodynamic scores
+          'plots_png': bytes,            # PNG plot of Tf and dG values
+          'summary': dict,               # brief run statistics
+        }
+    '''
+    def _log(msg):
+        print(msg)
+        if ctx is not None:
+            try:
+                ctx.log(msg)
+            except Exception:
+                pass
+
+    read_only           = getattr(args, 'readonly', False)
+    break_rule          = utilities.parse_break_rule(getattr(args, 'rule', 'xstap.all3'))
+    score_func          = utilities.parse_score_function(getattr(args, 'score', 'sum'))
+    optimization_func   = utilities.parse_optim_function(getattr(args, 'func', 'dG:50'))
+    global_solutions    = int(getattr(args, 'nsol', 10))
+    dontbreak_less_than = int(getattr(args, 'dontbreak', 0))
+    verbose_output      = int(getattr(args, 'verbose', 1))
+    random_seed         = int(getattr(args, 'seed', 0))
+    permute_sequence    = getattr(args, 'permute', False)
+    shuffle_oligos      = not getattr(args, 'sort', False)
+    npermute            = int(getattr(args, 'npermute', 0))
+
+    random.seed(random_seed)
+
+    new_origami   = origamidesign.Origami()
+    new_autobreak = AutoBreak()
+
+    new_origami.autobreak   = new_autobreak
+    new_autobreak.origami   = new_origami
+    new_autobreak.args_dict = vars(args) if hasattr(args, '__dict__') else {}
+
+    new_autobreak.set_break_rule(break_rule)
+    new_autobreak.set_solution_nums(1, global_solutions)
+    new_autobreak.set_optimization_func(optimization_func)
+    new_autobreak.set_score_func(score_func)
+    new_autobreak.set_permute_sequence(permute_sequence)
+    new_autobreak.set_oligo_shuffle_parameter(shuffle_oligos)
+    new_autobreak.preprocess_optim_params()
+    new_autobreak.set_verbose_output(verbose_output == 2)
+
+    # In-memory setup (no filesystem)
+    new_autobreak.set_output_directory(json_dict)
+    new_autobreak.set_write_all_results(False)
+    new_autobreak.set_temperature_parameter()
+    new_autobreak.set_lower_bound(getattr(args, 'minlength', 21))
+    new_autobreak.set_upper_bound(getattr(args, 'maxlength', 60))
+    new_autobreak.set_readonly(read_only)
+
+    # Load design from dict
+    new_origami.initialize_from_dict(json_dict)
+    new_origami.set_sequence_file(getattr(args, 'sequence', None))
+    new_origami.set_circularize(True)
+
+    new_autobreak.define_output_files()
+    new_autobreak.write_input_args()
+
+    new_origami.warn_circular_scaffold()
+
+    if read_only:
+        new_origami.prepare_origami()
+        new_origami.validate()
+        new_autobreak.permute_scaffold_sequence_readonly(npermute)
+        new_autobreak.correct_complete_solution_offsets()
+        new_autobreak.compare_complete_solutions()
+        new_autobreak.write_results_summary()
+        new_autobreak.set_best_sequence_offset()
+    else:
+        new_origami.prepare_origami()
+        new_origami.validate()
+        new_origami.cluster_oligo_groups()
+        new_origami.set_dont_break_oligos(dontbreak_less_than)
+        new_autobreak.initialize()
+        new_autobreak.create_results_excel_file()
+        new_autobreak.permute_scaffold_sequence_autobreak(npermute)
+        new_autobreak.correct_complete_solution_offsets()
+        new_autobreak.compare_complete_solutions()
+        new_autobreak.break_best_complete_solution()
+        new_autobreak.set_best_sequence_offset()
+
+    new_autobreak.determine_oligo_scores()
+    new_autobreak.export_initial_scores()
+    new_autobreak.calc_minmax_plot_params()
+    new_autobreak.color_oligos_by_Tf()
+
+    new_origami.split_scaffold()
+    new_origami.set_cadnano_sequence_offset()
+    new_autobreak.write_final_part_to_json()
+    new_autobreak.copy_sequence_file()
+    new_autobreak.create_staple_heatmap(False)
+    new_autobreak.create_results_plots()
+    new_autobreak.create_summary_figure()
+
+    # Collect outputs
+    result_cadnano_json = new_autobreak._result_json if not read_only else None
+
+    new_autobreak._csv_buf.seek(0)
+    csv_str = new_autobreak._csv_buf.read()
+
+    new_autobreak._plots_buf.seek(0)
+    plots_png = new_autobreak._plots_buf.read()
+
+    summary = {}
+    if new_autobreak.staples_frame is not None:
+        sf = new_autobreak.staples_frame
+        try:
+            tf_vals = sf['Tf'].astype(float)
+            summary['staple_count'] = len(sf)
+            summary['median_Tf']    = float(tf_vals.median())
+            summary['mean_Tf']      = float(tf_vals.mean())
+        except Exception:
+            pass
+
+    return {
+        'cadnano_json': result_cadnano_json,
+        'csv':          csv_str,
+        'plots_png':    plots_png,
+        'summary':      summary,
+    }

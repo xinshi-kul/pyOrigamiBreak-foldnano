@@ -6,12 +6,12 @@ import sys
 import numpy as np
 import matplotlib as mpl
 from matplotlib import pyplot as plt
-from fastprogress.fastprogress import master_bar, progress_bar
 import cadnano
 from cadnano.document import Document
+from cadnano.fileio.v2decode import decode as _v2decode
 
-from autobreak import autobreak, scaffolds, utilities
-from autobreak.validate import Validator
+import autobreak, scaffolds, utilities
+from validate import Validator
 
 class Sequence:
     def __init__(self):
@@ -92,10 +92,10 @@ class OligoGroup:
         # for i in tqdm(range(num_global_solutions), desc='Global loop', leave=False,
         #               dynamic_ncols=True, bar_format='{l_bar}{bar}', 
         #               file=self.origami.tqdm_output_file):
-        mb = master_bar(range(num_global_solutions))
+        mb = range(num_global_solutions)
 
         oligo_count = len(self.oligos)
-        mb.write(f'Processing {oligo_count} oligos per solution.')
+        print(f'Processing {oligo_count} oligos per solution.')
 
         for i in mb:
             # Reset temporary neighbor constraints
@@ -162,7 +162,7 @@ class OligoGroup:
             #         self.break_solutions[oligo_key].print_solution()
 
             score = new_group_solution.total_score
-            mb.write(f'Finished solution {i}. Score: {score:.5f}')
+            print(f'Finished solution {i}. Score: {score:.5f}')
 
 
     def sort_solutions(self, filter_incomplete=True):
@@ -994,6 +994,14 @@ class Origami:
         self.doc.readFile(self.json_input)
 
         # Assign part
+        self.part = self.doc.activePart()
+
+    def initialize_from_dict(self, json_dict):
+        '''Initialize from an in-memory cadnano v2 JSON dict (no filesystem).'''
+        app = cadnano.app()
+        self.doc = app.document = Document()
+        self.json_input = json_dict.get('name', 'design') + '.json'
+        _v2decode(self.doc, json_dict)
         self.part = self.doc.activePart()
 
     def split_scaffold(self):
@@ -1896,14 +1904,9 @@ class Origami:
             print("Recognized known scaffold %s." % (self.sequence_file))
             self.scaffold_sequence = scaffolds.SCAFFOLD_SEQUENCES[self.sequence_file]
 
-        elif self.sequence_file and os.path.isfile(self.sequence_file):
-            # Read sequence from file
-            f = open(self.sequence_file)
-            self.scaffold_sequence = ''.join([line.strip() for line in f.readlines()])
-            f.close()
-
-            # Convert to upper case
-            self.scaffold_sequence = self.scaffold_sequence.upper()
+        elif self.sequence_file and len(self.sequence_file) > 4 and all(c in 'ACGTacgt' for c in self.sequence_file):
+            # Treat value as a literal sequence string
+            self.scaffold_sequence = self.sequence_file.upper()
 
             # If sequence length is less than scaffold length quit
             if len(self.scaffold_sequence) < self.scaffolds[0].length():
