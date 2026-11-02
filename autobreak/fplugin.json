@@ -2,7 +2,7 @@
 	"schemaVersion": 2,
 	"id": "pyOrigamiBreak",
 	"name": "pyOrigamiBreak — Staple Auto-Break",
-	"version": "1.0.5",
+	"version": "1.0.6",
 	"description": "Optimises staple break positions using thermodynamic (dG) scoring.",
 	"tags": [
 		"caDNAno"
