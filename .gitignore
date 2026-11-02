@@ -1,7 +1,9 @@
 __pycache__/
 *egg-info/
 *.py[cod]
+# JSON is ignored so cadnano designs aren't committed by accident; the plugin manifest is the exception.
 *.json
+!/autobreak/fplugin.json
 *.txt
 .DS_Store
 build*

@@ -1,20 +1,52 @@
-# pyOrigamiBreak
+# pyOrigamiBreak for Foldnano
 
-## How to use
+A [Foldnano](https://github.com/XinShiLab/foldnano) plugin that optimizes staple break positions in
+caDNAno designs with thermodynamic scoring. It is adapted from
+[pyOrigamiBreak](https://github.com/douglaslab/pyOrigamiBreak) by the
+[Douglas Lab](https://bionano.ucsf.edu/), with the authors' permission, under the original MIT
+License.
 
-For an easy and interactive way to use Autobreak with your Cadnano designs, access the following [Colab notebook](https://colab.research.google.com/drive/1wRAO8LdY5XCeuZfsmvdUHlJWMBQmQBVa). It provides a step-by-step guide to integrate Autobreak into your workflow.
+Install it in Foldnano from the plugin Hub's **Community Plugins** section.
 
+## Branches
+
+- `main` tracks the upstream project unchanged.
+- `foldnano_plugin` holds the plugin. The changes from upstream are in-memory input and output
+  instead of files, flat imports and Pyodide compatibility; see `docs/plugin-diff-report.md`. The
+  command-line tool and its helper scripts are not part of this branch.
+
+## Layout
+
+`autobreak/` holds exactly the files of the plugin zip: `fplugin.json` (the plugin manifest),
+`plugin.py` (the Foldnano entry point), the adapted modules, `LICENSE` and `NOTICE`.
+
+## Releasing a version
+
+1. Change the plugin files and bump `version` in `autobreak/fplugin.json`.
+2. Pack the zip with the
+   [foldnano-plugins](https://github.com/XinShiLab/foldnano-plugins) repo, checked out next to this
+   one:
+
+   ```sh
+   cd ../foldnano-plugins
+   npm run pack -- ../pyOrigamiBreak_mini/autobreak
+   ```
+
+   Packing is reproducible: the same files always give the same SHA-256, so anyone can check a
+   listed zip against this branch.
+
+3. Add the printed entry to the listing there, following its `CONTRIBUTING.md`.
 
 ## How to cite
 
-We invite you to support the project by citing these references:
+If you use this plugin in published work, please cite:
 
 ```
-Design principles for accurate folding of DNA origami
-Aksel et al. (2024)
-https://doi.org/10.1101/2024.03.18.585609 
+Aksel, T., Navarro, E. J., Fong, N. and Douglas, S. M.
+Design principles for accurate folding of DNA origami.
+Proceedings of the National Academy of Sciences 121(48), e2406769121 (2024).
+https://doi.org/10.1073/pnas.2406769121
 ```
-Upon journal publication, the complete citation details will be provided here. Please check back for updates or contact the authors for the most current information.
 
 ```
 Rapid prototyping of 3D DNA-origami shapes with caDNAno
@@ -22,39 +54,6 @@ Douglas et al. Nucleic Acids Res: 37(15):5001–6 (2009)
 https://doi.org/10.1093/nar/gkp436
 ```
 
-## Where to download Cadnano designs
-
-- Published Douglas Lab designs are available at https://github.com/douglaslab/cadnano-designs
-- Additional source files may be available at https://nanobase.org/
-
-## How to get help
-
-- Before contacting us, please read the manuscript, this README, and all documentation in the Colab notebook.
-- If you encounter a technical problem,  submit a [New Issue](https://github.com/douglaslab/pyOrigamiBreak/issues). Please describe the exact steps to reproduce it. Attach or email us the Cadnano file input, as well as any file outputs that resulted from an attempted run.
-
-
-## Development
-
-We use a pyproject.toml-based [build process](https://pip.pypa.io/en/stable/reference/build-system/pyproject-toml/) in pip. This workflow was tested with Python 3.12 on macOS and Linux distributions in late 2023.
-
-**Setup a dev environment (Mac or Linux)**
-
-* Create a virtualenv: `python3 -m venv ~/virtualenvs/abdev` 
-* Activate virtualenv: `source ~/virtualenvs/abdev/bin/activate`
-* Clone repo: `git clone git@github.com:douglaslab/pyOrigamiBreak.git`
-* Change directory: `cd pyOrigamiBreak`
-* Make desired code edits
-* Build and install in [editable mode](https://pip.pypa.io/en/stable/cli/pip_install/#cmdoption-e): `pip install -e .` 
-* Test: `autobreak -i cadnanofile.json`
-* Repeat previous 3 steps as needed
-
-**Build new dist and upload to PyPi**
-
-* `pip install build twine` <- install [build](https://pypi.org/project/build/) and [twine](https://pypi.org/project/twine/)
-* `cd /path/to/pyOrigamiBreak/` 
-* `python3 -m build`  creates dist/pyOrigamiBreak-x.y.z.tar.gz and pyOrigamiBreak-x.y.z-py3-none-any.whl
-* `python3 -m twine upload dist/pyOrigamiBreak-x.y.z`
-
 ## License
 
-This version of pyOrigamiBreak is available under the MIT License.
+MIT, as the original project. See `LICENSE`.
