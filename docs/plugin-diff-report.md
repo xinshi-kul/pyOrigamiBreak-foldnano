@@ -1,10 +1,14 @@
 # pyOrigamiBreak Plugin Diff Report
 
-Compared on 2026-04-16:
+Written on 2026-04-16, when the plugin was still uncommitted work on top of the original code.
+Re-checked on 2026-11-02 against plugin version 1.0.5: the line counts, the hashes of the
+unchanged files and the options `plugin.py` fixes still match, and the plugin code has not changed
+since. The analysis below is kept as written; only the paths and commands were updated.
 
-- Reference source: `autobreak/` at HEAD in this repo (original CLI version)
-- Plugin source: `autobreak/` working-tree modifications in this repo
-- Plugin archive: `autobreak/pyOrigamiBreak.zip` (built by `scripts/build_plugin.py`)
+- Reference source: `autobreak/` on `main` (the upstream command-line version)
+- Plugin source: `autobreak/` on `foldnano_plugin`
+- Plugin zip: packed from `autobreak/` by the
+  [foldnano-plugins](https://github.com/XinShiLab/foldnano-plugins) pack script, and listed there
 
 ## Executive Summary
 
@@ -21,28 +25,29 @@ The core break-search/scoring classes and methods inside `autobreak.py` appear p
 Syntax check passed for all Python files:
 
 ```bash
-python3 -m py_compile static/plugins/pyOrigamiBreak/*.py ref_pyOrigamiBreak/autobreak/*.py
+python3 -m py_compile autobreak/*.py
 ```
 
 ## File-Level Comparison
 
-`git diff HEAD autobreak/autobreak.py autobreak/origamidesign.py` (working tree vs HEAD):
+`git diff main foldnano_plugin -- autobreak/`:
 
 ```text
-Only in HEAD autobreak/: __init__.py  (not included in plugin)
-autobreak/autobreak.py differs between HEAD and working tree
-Only in HEAD autobreak/: exportoligos.py  (not included in plugin)
-autobreak/origamidesign.py differs between HEAD and working tree
-Only in working tree: autobreak/plugin.py  (plugin entry point)
+Only on main: autobreak/__init__.py  (not included in plugin)
+autobreak/autobreak.py differs
+Only on main: autobreak/exportoligos.py  (not included in plugin)
+autobreak/origamidesign.py differs
+Only on foldnano_plugin: autobreak/plugin.py  (plugin entry point)
+Only on foldnano_plugin: autobreak/fplugin.json, LICENSE, NOTICE  (plugin manifest and notices)
 ```
 
 Line counts:
 
 ```text
-2640 autobreak/autobreak.py  (HEAD, original CLI)
-2517 autobreak/autobreak.py  (working tree, plugin)
-1946 autobreak/origamidesign.py  (HEAD, original CLI)
-1949 autobreak/origamidesign.py  (working tree, plugin)
+2640 autobreak/autobreak.py  (main, original CLI)
+2517 autobreak/autobreak.py  (foldnano_plugin, plugin)
+1946 autobreak/origamidesign.py  (main, original CLI)
+1949 autobreak/origamidesign.py  (foldnano_plugin, plugin)
 ```
 
 The following files are identical by SHA-256:
@@ -224,6 +229,9 @@ Assessment: plugin behavior is equivalent only for this supported option subset.
 
 ## Test Strategy
 
+A proposal; none of these tests exist yet. The fixtures named below (`test_files/`) are in the
+[Foldnano](https://github.com/XinShiLab/foldnano) repository, not this one.
+
 The goal should be semantic equivalence of the design output and numeric equivalence of staple scores, not byte equivalence of files.
 
 ### 1. Unit Parity for Pure Functions
@@ -310,8 +318,8 @@ Use a compact fixture/parameter matrix:
 
 Add one integration smoke test around the actual plugin archive path:
 
-1. Install the plugin requirements from `pyOrigamiBreak.fplugin.json`.
-2. Run `static/plugins/pyOrigamiBreak/pyOrigamiBreak.zip` through the existing worker harness.
+1. Install the plugin requirements from `autobreak/fplugin.json`.
+2. Run the packed plugin zip through Foldnano's worker harness.
 3. Assert:
    - plugin completes
    - `results.csv` artifact exists and has expected columns
@@ -325,12 +333,12 @@ This catches archive packaging, import path, wheel availability, and artifact en
 
 Create a Python test helper that runs both implementations in isolated subprocesses to avoid module-name collisions (`autobreak.py` exists in both trees):
 
-- Original runner:
-  - set `PYTHONPATH=ref_pyOrigamiBreak`
+- Original runner (a checkout of `main`):
+  - set `PYTHONPATH` to that checkout
   - run `python -m autobreak.autobreak ...`
   - capture output directory path or pass `--output` to a temp dir
 - Plugin runner:
-  - set `PYTHONPATH=static/plugins/pyOrigamiBreak`
+  - set `PYTHONPATH=autobreak` on `foldnano_plugin`
   - import `autobreak`
   - call `run_plugin(json_dict, args)`
   - write returned artifacts to a temp dir for comparison
